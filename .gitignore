@@ -13,6 +13,10 @@ db.sqlite3-journal
 # Google credentials
 service-account-*.json
 credentials.json
+sadyakochi-807e41962ade.json
+token.pickle
+client_secret.json
+
 
 # Media files
 media/

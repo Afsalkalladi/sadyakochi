@@ -434,45 +434,45 @@ class EeOnamBot:
         summary = '\n'.join(summary_lines)
         return Decimal(str(total)), summary
     
-   def _handle_delivery_details(self, session: UserSession, message_text: str,
-                            location_data: Dict) -> bool:
-    """Handle delivery address input"""
-    
-    if location_data:
-        # User shared location
-        lat = location_data.get('latitude')
-        lng = location_data.get('longitude')
+    def _handle_delivery_details(self, session: UserSession, message_text: str,
+                                location_data: Dict) -> bool:
+        """Handle delivery address input"""
         
-        if lat and lng:
-            # Corrected Google Maps URL format
-            maps_link = f"https://www.google.com/maps/place/{lat},{lng}"
-            session.maps_link = maps_link
-            session.delivery_address = f"Location: {lat}, {lng}"
+        if location_data:
+            # User shared location
+            lat = location_data.get('latitude')
+            lng = location_data.get('longitude')
+            
+            if lat and lng:
+                # Corrected Google Maps URL format
+                maps_link = f"https://www.google.com/maps/place/{lat},{lng}"
+                session.maps_link = maps_link
+                session.delivery_address = f"Location: {lat}, {lng}"
+            else:
+                return self.whatsapp.send_message(
+                    session.phone_number,
+                    "Unable to process location. Please share your location again or type your address."
+                )
+        
+        elif message_text:
+            # User typed address
+            session.delivery_address = message_text.strip()
+        
         else:
             return self.whatsapp.send_message(
                 session.phone_number,
-                "Unable to process location. Please share your location again or type your address."
+                "Please provide your delivery address or share your location."
             )
-    
-    elif message_text:
-        # User typed address
-        session.delivery_address = message_text.strip()
-    
-    else:
-        return self.whatsapp.send_message(
-            session.phone_number,
-            "Please provide your delivery address or share your location."
+        
+        session.save()
+        
+        # Calculate total and generate payment QR
+        selected_items = json.loads(session.selected_items)
+        total_amount, order_summary = self._calculate_total(
+            selected_items, session.selected_junction
         )
-    
-    session.save()
-    
-    # Calculate total and generate payment QR
-    selected_items = json.loads(session.selected_items)
-    total_amount, order_summary = self._calculate_total(
-        selected_items, session.selected_junction
-    )
-    
-    return self._generate_payment_qr(session, total_amount, order_summary)
+        
+        return self._generate_payment_qr(session, total_amount, order_summary)
     
     def _generate_payment_qr(self, session: UserSession, total_amount: Decimal, 
                            order_summary: str) -> bool:

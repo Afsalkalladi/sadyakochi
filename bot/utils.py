@@ -8,6 +8,7 @@ import logging
 import os
 import random
 import string
+import pickle
 from datetime import datetime, timedelta
 from typing import List, Optional
 
@@ -19,6 +20,8 @@ from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 import gspread
+from google.auth.transport.requests import Request
+from google_auth_oauthlib.flow import InstalledAppFlow
 
 logger = logging.getLogger(__name__)
 
@@ -182,27 +185,32 @@ def upload_to_drive(media_url: str, order_id: str) -> Optional[str]:
 
 
 def get_google_credentials():
-    """Get Google API credentials"""
+    """Get Google API credentials using a pre-generated token.pickle file."""
+    creds = None
+    SCOPES = [
+        'https://www.googleapis.com/auth/drive',
+        'https://www.googleapis.com/auth/spreadsheets'
+    ]
+
+    # The file token.pickle stores the user's access and refresh tokens.
+    # On Render, this will be the path to the uploaded secret file.
+    token_path = os.getenv('GOOGLE_OAUTH_TOKEN_PATH', 'token.pickle')
     
-    try:
-        credentials_path = settings.GOOGLE_CREDENTIALS_JSON
-        if not os.path.exists(credentials_path):
-            logger.error(f"Google credentials file not found: {credentials_path}")
-            return None
+    if os.path.exists(token_path):
+        with open(token_path, 'rb') as token:
+            creds = pickle.load(token)
+    
+    # If the token is expired, try to refresh it
+    if creds and creds.expired and creds.refresh_token:
+        creds.refresh(Request())
         
-        creds = Credentials.from_service_account_file(
-            credentials_path,
-            scopes=[
-                'https://www.googleapis.com/auth/drive',
-                'https://www.googleapis.com/auth/spreadsheets'
-            ]
-        )
-        
-        return creds
-        
-    except Exception as e:
-        logger.error(f"Error getting Google credentials: {e}")
+    if not creds or not creds.valid:
+        # This part should not be reached in production if the token is valid,
+        # but is included as a fallback for local testing.
+        logger.error("OAuth token is invalid or missing. Please re-authenticate locally.")
         return None
+            
+    return creds
 
 
 def save_to_google_sheet(order) -> bool:
