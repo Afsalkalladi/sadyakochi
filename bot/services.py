@@ -137,7 +137,7 @@ class EeOnamBot:
             defaults={'current_step': 'start'}
         )
         session.update_interaction()
-        
+
         # Check for the 'start' message to reset the session
         if message_text and message_text.lower().strip() == 'start':
             session.current_step = 'start'
@@ -444,7 +444,8 @@ class EeOnamBot:
             lng = location_data.get('longitude')
             
             if lat and lng:
-                maps_link = f"https://maps.google.com/?q={lat},{lng}"
+                # Corrected Google Maps URL
+                maps_link = f"https://www.google.com/maps/place/{lat},{lng}"
                 session.maps_link = maps_link
                 session.delivery_address = f"Location: {lat}, {lng}"
             else:
@@ -468,7 +469,7 @@ class EeOnamBot:
         # Calculate total and generate payment QR
         selected_items = json.loads(session.selected_items)
         total_amount, order_summary = self._calculate_total(
-                selected_items, session.selected_junction
+            selected_items, session.selected_junction
         )
         
         return self._generate_payment_qr(session, total_amount, order_summary)
