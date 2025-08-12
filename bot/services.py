@@ -138,6 +138,11 @@ class EeOnamBot:
         )
         session.update_interaction()
         
+        # Check for the 'start' message to reset the session
+        if message_text and message_text.lower().strip() == 'start':
+            session.current_step = 'start'
+            session.save()
+        
         try:
             if created or session.current_step == 'start':
                 return self._handle_start(session)
@@ -463,7 +468,7 @@ class EeOnamBot:
         # Calculate total and generate payment QR
         selected_items = json.loads(session.selected_items)
         total_amount, order_summary = self._calculate_total(
-            selected_items, session.selected_junction
+                selected_items, session.selected_junction
         )
         
         return self._generate_payment_qr(session, total_amount, order_summary)
