@@ -9,7 +9,7 @@ app_name = 'bot'
 
 urlpatterns = [
     # WhatsApp webhook - Now using DebugWebhookView for extensive logging
-    path('webhook/', views.DebugWebhookView.as_view(), name='webhook'),
+    path('webhook/', views.WhatsAppWebhookView.as_view(), name='webhook'),
     
     # Verification endpoints
     path('verify/<uuid:token>/', views.verify_payment, name='verify_payment'),
