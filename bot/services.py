@@ -468,6 +468,8 @@ class EeOnamBot:
         
         # Calculate total and generate payment QR
         selected_items = json.loads(session.selected_items)
+        # Convert keys to int to avoid KeyError in _calculate_total
+        selected_items = {int(k): v for k, v in selected_items.items()}
         total_amount, order_summary = self._calculate_total(
             selected_items, session.selected_junction
         )
