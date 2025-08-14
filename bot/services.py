@@ -171,17 +171,19 @@ class EeOnamBot:
     
     def _handle_start(self, session: UserSession) -> bool:
         """Handle start of conversation"""
+        YOUTUBE_LINK = "https://youtu.be/GjeiUTa8Pzc?si=pOPcBmXFLhwoOkFv"
         welcome_message = (
             "🎉 *Welcome to EeOnam - OnamSadhya 2025!* 🎉\n\n"
             "We're excited to serve you delicious Onam Sadhya! "
+            "\n\n*How to use this bot:*\nWatch this video: " + YOUTUBE_LINK + "\n\n"
             "Let's start by selecting your preferred delivery date.\n\n"
             "Please choose a date (minimum 3 days in advance):"
         )
-        
+        # Send the welcome message with YouTube link
+        self.whatsapp.send_message(session.phone_number, welcome_message)
         # Get available dates
         dates = get_available_dates()
         buttons = []
-        
         for i, date in enumerate(dates[:3]):  # Show first 3 dates as buttons
             buttons.append({
                 "type": "reply",
