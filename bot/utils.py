@@ -1,3 +1,5 @@
+import cloudinary
+import cloudinary.uploader
 """
 Utility functions for EeOnam bot - DEBUG VERSION with extensive logging
 Now uses JSON for token storage instead of pickle for Render compatibility.
@@ -106,7 +108,22 @@ def generate_qr_code(amount: float, order_id: str) -> Optional[str]:
         img_buffer = io.BytesIO()
         img.save(img_buffer, format='PNG')
         img_buffer.seek(0)
-        return upload_qr_to_drive(img_buffer, f"qr_{order_id}.png")
+
+        # Upload to Cloudinary
+        cloudinary.config(
+            cloud_name=getattr(settings, 'CLOUDINARY_CLOUD_NAME', None),
+            api_key=getattr(settings, 'CLOUDINARY_API_KEY', None),
+            api_secret=getattr(settings, 'CLOUDINARY_API_SECRET', None)
+        )
+        result = cloudinary.uploader.upload(
+            img_buffer,
+            folder="qr_codes",
+            public_id=f"qr_{order_id}",
+            overwrite=True,
+            resource_type="image"
+        )
+        qr_url = result.get('secure_url')
+        return qr_url
     except Exception:
         logger.error(traceback.format_exc())
         return None
