@@ -180,38 +180,80 @@ def upload_to_cloudinary(media_url: str, order_id: str) -> Optional[str]:
 
 
 def get_google_credentials():
-    """Load credentials from JSON token file (token.json) using env config."""
+    """Load credentials from environment variable (GOOGLE_OAUTH_TOKEN_JSON)."""
     SCOPES = [
         'https://www.googleapis.com/auth/drive',
         'https://www.googleapis.com/auth/spreadsheets'
     ]
-    token_path = os.getenv('GOOGLE_OAUTH_TOKEN_PATH', 'token.json')
     
     creds = None
-    if os.path.exists(token_path):
+    
+    # Try to get token from environment variable first
+    token_json_str = os.getenv('GOOGLE_OAUTH_TOKEN_JSON')
+    if token_json_str:
         try:
-            with open(token_path, 'r') as token_file:
-                token_data = json.load(token_file)
-                creds = Credentials.from_authorized_user_info(token_data, SCOPES)
-        except Exception:
+            logger.debug("Loading Google credentials from environment variable")
+            token_data = json.loads(token_json_str)
+            creds = Credentials.from_authorized_user_info(token_data, SCOPES)
+            logger.debug("Successfully loaded credentials from environment variable")
+        except json.JSONDecodeError as e:
+            logger.error(f"Error parsing GOOGLE_OAUTH_TOKEN_JSON: {str(e)}")
+            return None
+        except Exception as e:
+            logger.error(f"Error creating credentials from environment variable: {str(e)}")
             logger.error(traceback.format_exc())
             return None
     else:
-        logger.error(f"Token file not found: {token_path}")
-        return None
+        # Fallback to token.json file (for local development)
+        token_path = os.getenv('GOOGLE_OAUTH_TOKEN_PATH', 'token.json')
+        if os.path.exists(token_path):
+            try:
+                logger.debug(f"Loading Google credentials from file: {token_path}")
+                with open(token_path, 'r') as token_file:
+                    token_data = json.load(token_file)
+                    creds = Credentials.from_authorized_user_info(token_data, SCOPES)
+                logger.debug("Successfully loaded credentials from file")
+            except Exception as e:
+                logger.error(f"Error loading credentials from file: {str(e)}")
+                logger.error(traceback.format_exc())
+                return None
+        else:
+            logger.error(f"Neither GOOGLE_OAUTH_TOKEN_JSON environment variable nor token file found at: {token_path}")
+            return None
     
+    # Handle token refresh
     if creds and creds.expired and creds.refresh_token:
         try:
+            logger.debug("Refreshing expired Google credentials")
             creds.refresh(Request())
-            with open(token_path, 'w') as token_file:
-                token_file.write(creds.to_json())
-        except Exception:
+            
+            # Save refreshed token back to environment variable or file
+            refreshed_token_json = creds.to_json()
+            
+            if token_json_str:  # If we loaded from env var
+                # Log that token was refreshed (but don't try to update env var as it's read-only)
+                logger.info("Token refreshed successfully. Note: Environment variable should be updated with new token for future deployments.")
+                logger.debug("Refreshed token (update your GOOGLE_OAUTH_TOKEN_JSON env var with this):")
+                logger.debug(refreshed_token_json)
+            else:  # If we loaded from file
+                token_path = os.getenv('GOOGLE_OAUTH_TOKEN_PATH', 'token.json')
+                try:
+                    with open(token_path, 'w') as token_file:
+                        token_file.write(refreshed_token_json)
+                    logger.debug(f"Updated token file: {token_path}")
+                except Exception as e:
+                    logger.error(f"Error updating token file: {str(e)}")
+                    
+        except Exception as e:
+            logger.error(f"Error refreshing Google credentials: {str(e)}")
             logger.error(traceback.format_exc())
             return None
     
     if not creds or not creds.valid:
-        logger.error("Invalid or missing credentials.")
+        logger.error("Invalid or missing Google credentials.")
         return None
+        
+    logger.debug("Google credentials are valid and ready to use")
     return creds
 
 
