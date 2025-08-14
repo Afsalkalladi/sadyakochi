@@ -18,7 +18,7 @@ from .location_manager import location_manager
 from .utils import (
     generate_order_id, 
     generate_qr_code, 
-    upload_to_drive, 
+    upload_to_cloudinary,  # ← Changed from upload_to_drive
     save_to_google_sheet,
     get_available_dates
 )
@@ -545,10 +545,10 @@ class EeOnamBot:
             )
         
         try:
-            # Upload to Google Drive
-            drive_url = upload_to_drive(media_url, session.current_order.order_id)
+            # Upload to Cloudinary (changed from Google Drive)
+            cloudinary_url = upload_to_cloudinary(media_url, session.current_order.order_id)
             
-            if not drive_url:
+            if not cloudinary_url:
                 return self.whatsapp.send_message(
                     session.phone_number,
                     "Error uploading screenshot. Please try again."
@@ -556,7 +556,7 @@ class EeOnamBot:
             
             # Update order
             order = session.current_order
-            order.payment_screenshot_url = drive_url
+            order.payment_screenshot_url = cloudinary_url  # Now stores Cloudinary URL
             order.save()
             
             # Save to Google Sheet
