@@ -1,7 +1,4 @@
-# Cloudinary Settings
-CLOUDINARY_CLOUD_NAME = os.getenv('CLOUDINARY_CLOUD_NAME')
-CLOUDINARY_API_KEY = os.getenv('CLOUDINARY_API_KEY')
-CLOUDINARY_API_SECRET = os.getenv('CLOUDINARY_API_SECRET')
+
 """
 Django settings for eeonam_project project.
 
@@ -36,6 +33,10 @@ DEBUG = os.getenv('DEBUG', 'True') == 'True'
 
 ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
 
+# Cloudinary Settings
+CLOUDINARY_CLOUD_NAME = os.getenv('CLOUDINARY_CLOUD_NAME')
+CLOUDINARY_API_KEY = os.getenv('CLOUDINARY_API_KEY')
+CLOUDINARY_API_SECRET = os.getenv('CLOUDINARY_API_SECRET')
 
 # Application definition
 
