@@ -18,7 +18,7 @@ from .location_manager import location_manager
 from .utils import (
     generate_order_id, 
     generate_qr_code, 
-    upload_to_cloudinary,  # ← Changed from upload_to_drive
+    upload_to_cloudinary,  # Updated to match utils.py
     save_to_google_sheet,
     get_available_dates
 )

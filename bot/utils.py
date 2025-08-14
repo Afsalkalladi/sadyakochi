@@ -1,5 +1,7 @@
 import io
 import qrcode
+import traceback
+from typing import Optional  # Add this import
 from PIL import Image, ImageDraw, ImageFont
 import cloudinary
 import cloudinary.uploader
@@ -216,3 +218,98 @@ def configure_cloudinary():
         api_key=getattr(settings, 'CLOUDINARY_API_KEY', None),
         api_secret=getattr(settings, 'CLOUDINARY_API_SECRET', None)
     )
+
+
+def upload_to_cloudinary(media_url: str, order_id: str) -> Optional[str]:
+    """
+    Upload payment screenshot to Cloudinary
+    """
+    try:
+        import requests
+        
+        # Download the image from WhatsApp
+        headers = {
+            'Authorization': f'Bearer {settings.WHATSAPP_ACCESS_TOKEN}'
+        }
+        
+        response = requests.get(media_url, headers=headers, timeout=30)
+        response.raise_for_status()
+        
+        # Configure Cloudinary
+        configure_cloudinary()
+        
+        # Upload to Cloudinary
+        result = cloudinary.uploader.upload(
+            response.content,
+            folder="payment_screenshots",
+            public_id=f"payment_{order_id}",
+            overwrite=True,
+            resource_type="image"
+        )
+        
+        cloudinary_url = result.get('secure_url')
+        logger.debug(f"Payment screenshot uploaded to Cloudinary: {cloudinary_url}")
+        return cloudinary_url
+        
+    except Exception as e:
+        logger.error(f"Error uploading to Cloudinary: {str(e)}")
+        logger.error(traceback.format_exc())
+        return None
+
+
+def generate_order_id() -> str:
+    """Generate unique order ID"""
+    import uuid
+    from datetime import datetime
+    
+    # Format: EO-YYYYMMDD-XXXX where XXXX is last 4 chars of UUID
+    date_str = datetime.now().strftime('%Y%m%d')
+    uuid_suffix = str(uuid.uuid4()).replace('-', '')[-4:].upper()
+    
+    return f"EO-{date_str}-{uuid_suffix}"
+
+
+def get_available_dates():
+    """Get list of available delivery dates (minimum 3 days advance)"""
+    from datetime import datetime, timedelta
+    
+    # Start from 3 days from now
+    start_date = datetime.now().date() + timedelta(days=3)
+    
+    # Generate next 30 days
+    dates = []
+    for i in range(30):
+        date = start_date + timedelta(days=i)
+        dates.append(date)
+    
+    return dates
+
+
+def save_to_google_sheet(order) -> bool:
+    """
+    Save order to Google Sheet
+    This is a placeholder - implement Google Sheets API integration
+    """
+    try:
+        # Placeholder implementation
+        logger.info(f"Would save order {order.order_id} to Google Sheet")
+        # TODO: Implement actual Google Sheets API integration
+        return True
+    except Exception as e:
+        logger.error(f"Error saving to Google Sheet: {str(e)}")
+        return False
+
+
+def update_sheet_verification_status(order, status: str) -> bool:
+    """
+    Update verification status in Google Sheet
+    This is a placeholder - implement Google Sheets API integration
+    """
+    try:
+        # Placeholder implementation
+        logger.info(f"Would update order {order.order_id} status to {status} in Google Sheet")
+        # TODO: Implement actual Google Sheets API integration
+        return True
+    except Exception as e:
+        logger.error(f"Error updating Google Sheet: {str(e)}")
+        return False
