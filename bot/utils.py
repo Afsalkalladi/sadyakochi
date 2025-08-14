@@ -1,315 +1,366 @@
-import io
-import qrcode
-import traceback
-from typing import Optional  # Add this import
-from PIL import Image, ImageDraw, ImageFont
-import cloudinary
-import cloudinary.uploader
-from django.conf import settings
+
+import gspread
+from datetime import datetime
+import json
+import os
 import logging
 
+import traceback
+
 logger = logging.getLogger(__name__)
+from django.conf import settings
 
-def generate_qr_code(amount: float, order_id: str) -> Optional[str]:
-    """
-    Generate a branded QR code with Sadya Kochi branding and graphics.
-    Ensures the final image is at least 10KB in size.
-    """
+def get_google_sheets_client():
+    """Initialize and return Google Sheets client using OAuth token from env"""
     try:
-        upi_string = (
-            f"upi://pay?"
-            f"pa={settings.UPI_ID}&"
-            f"pn={settings.UPI_MERCHANT_NAME}&"
-            f"am={amount}&"
-            f"cu=INR&"
-            f"tn=Order_{order_id}"
-        )
+        token_json_str = getattr(settings, 'GOOGLE_OAUTH_TOKEN_JSON', None) or os.getenv('GOOGLE_OAUTH_TOKEN_JSON')
+        if not token_json_str:
+            raise Exception("GOOGLE_OAUTH_TOKEN_JSON not set in environment or settings.")
+        token_data = json.loads(token_json_str)
+        creds = gspread.auth.service_account.Credentials.from_authorized_user_info(token_data)
+        client = gspread.authorize(creds)
+        return client
+    except Exception as e:
+        logger.error(f"Error initializing Google Sheets client: {str(e)}")
+        return None
+
+
+def get_or_create_worksheet():
+    """Get the first worksheet in the Google Sheet (no worksheet name env needed)"""
+    try:
+        client = get_google_sheets_client()
+        if not client:
+            return None
+        spreadsheet = client.open_by_key(settings.GOOGLE_SHEET_ID)
+        worksheet = spreadsheet.get_worksheet(0)  # Use the first worksheet
+        return worksheet
+    except Exception as e:
+        logger.error(f"Error getting worksheet: {str(e)}")
+        return None
+
+def get_or_create_worksheet():
+    """Get or create the orders worksheet"""
+    try:
+        client = get_google_sheets_client()
+        if not client:
+            return None
+            
+        # Open the spreadsheet
+        spreadsheet = client.open_by_key(settings.GOOGLE_SHEETS_SPREADSHEET_ID)
         
-        # Create QR code with higher settings for better quality
-        qr = qrcode.QRCode(
-            version=3,  # Increased from 1 to 3 for higher capacity and size
-            error_correction=qrcode.constants.ERROR_CORRECT_H,  # Highest error correction
-            box_size=15,  # Increased from 10 to 15 for larger QR code
-            border=6,  # Increased border
-        )
-        qr.add_data(upi_string)
-        qr.make(fit=True)
-        
-        # Generate base QR code
-        qr_img = qr.make_image(fill_color="black", back_color="white")
-        
-        # Create a larger canvas with branding
-        canvas_width = 800  # Large canvas for high resolution
-        canvas_height = 1000
-        
-        # Create new image with white background
-        canvas = Image.new('RGB', (canvas_width, canvas_height), 'white')
-        draw = ImageDraw.Draw(canvas)
-        
-        # Add decorative border
-        border_color = "#2E8B57"  # Sea green color for Kerala theme
-        border_width = 8
-        draw.rectangle([0, 0, canvas_width, canvas_height], outline=border_color, width=border_width)
-        
-        # Add inner decorative border
-        inner_border_margin = 20
-        draw.rectangle([
-            inner_border_margin, inner_border_margin, 
-            canvas_width - inner_border_margin, canvas_height - inner_border_margin
-        ], outline="#FFD700", width=4)  # Golden border
-        
-        # Add brand header background
-        header_height = 120
-        draw.rectangle([
-            border_width, border_width, 
-            canvas_width - border_width, header_height + border_width
-        ], fill="#2E8B57")
-        
-        # Try to load custom fonts, fallback to default
         try:
-            # For title - larger font
-            title_font = ImageFont.truetype("/System/Library/Fonts/Arial.ttc", 48)
-            # For subtitle - medium font
-            subtitle_font = ImageFont.truetype("/System/Library/Fonts/Arial.ttc", 24)
-            # For details - smaller font
-            detail_font = ImageFont.truetype("/System/Library/Fonts/Arial.ttc", 20)
-        except:
-            try:
-                title_font = ImageFont.load_default()
-                subtitle_font = ImageFont.load_default()
-                detail_font = ImageFont.load_default()
-            except:
-                title_font = None
-                subtitle_font = None
-                detail_font = None
-        
-        # Add brand name
-        brand_text = "SADYA KOCHI"
-        if title_font:
-            bbox = draw.textbbox((0, 0), brand_text, font=title_font)
-            text_width = bbox[2] - bbox[0]
-            text_x = (canvas_width - text_width) // 2
-            draw.text((text_x, 25), brand_text, fill="white", font=title_font)
-        
-        # Add tagline
-        tagline = "Authentic Kerala Meals Delivered"
-        if subtitle_font:
-            bbox = draw.textbbox((0, 0), tagline, font=subtitle_font)
-            text_width = bbox[2] - bbox[0]
-            text_x = (canvas_width - text_width) // 2
-            draw.text((text_x, 80), tagline, fill="#FFD700", font=subtitle_font)
-        
-        # Resize QR code to fit nicely in the canvas
-        qr_size = 450  # Large QR code
-        qr_img_resized = qr_img.resize((qr_size, qr_size), Image.Resampling.LANCZOS)
-        
-        # Position QR code in center
-        qr_x = (canvas_width - qr_size) // 2
-        qr_y = header_height + 50
-        
-        # Add QR code background with shadow effect
-        shadow_offset = 5
-        shadow_color = "#CCCCCC"
-        draw.rectangle([
-            qr_x + shadow_offset, qr_y + shadow_offset,
-            qr_x + qr_size + shadow_offset, qr_y + qr_size + shadow_offset
-        ], fill=shadow_color)
-        
-        # Add white background for QR code
-        draw.rectangle([qr_x - 10, qr_y - 10, qr_x + qr_size + 10, qr_y + qr_size + 10], 
-                      fill="white", outline="#DDDDDD", width=2)
-        
-        # Paste the QR code
-        canvas.paste(qr_img_resized, (qr_x, qr_y))
-        
-        # Add payment details below QR code
-        details_y = qr_y + qr_size + 40
-        
-        # Payment amount
-        amount_text = f"Amount: ₹{amount:.2f}"
-        if detail_font:
-            bbox = draw.textbbox((0, 0), amount_text, font=detail_font)
-            text_width = bbox[2] - bbox[0]
-            text_x = (canvas_width - text_width) // 2
-            draw.text((text_x, details_y), amount_text, fill="#2E8B57", font=detail_font)
-        
-        # Order ID
-        order_text = f"Order ID: {order_id}"
-        if detail_font:
-            bbox = draw.textbbox((0, 0), order_text, font=detail_font)
-            text_width = bbox[2] - bbox[0]
-            text_x = (canvas_width - text_width) // 2
-            draw.text((text_x, details_y + 35), order_text, fill="#666666", font=detail_font)
-        
-        # Instructions
-        instruction_text = "Scan to pay with any UPI app"
-        if detail_font:
-            bbox = draw.textbbox((0, 0), instruction_text, font=detail_font)
-            text_width = bbox[2] - bbox[0]
-            text_x = (canvas_width - text_width) // 2
-            draw.text((text_x, details_y + 70), instruction_text, fill="#666666", font=detail_font)
-        
-        # Add decorative elements (simple geometric patterns)
-        # Top corners
-        for i in range(3):
-            draw.arc([30 + i*10, 140 + i*10, 70 + i*10, 180 + i*10], 
-                    start=0, end=90, fill="#FFD700", width=3)
-            draw.arc([canvas_width - 70 - i*10, 140 + i*10, 
-                     canvas_width - 30 - i*10, 180 + i*10], 
-                    start=90, end=180, fill="#FFD700", width=3)
-        
-        # Convert to bytes with high quality
-        img_buffer = io.BytesIO()
-        canvas.save(img_buffer, format='PNG', quality=95, optimize=False)
-        img_buffer.seek(0)
-        
-        # Check file size and increase quality if needed
-        current_size = len(img_buffer.getvalue())
-        logger.debug(f"Generated QR code size: {current_size} bytes")
-        
-        # If still under 10KB, increase the canvas size
-        if current_size < 10240:  # 10KB
-            logger.debug("Image under 10KB, increasing size...")
-            canvas_width = 1000
-            canvas_height = 1200
+            # Try to get existing worksheet
+            worksheet = spreadsheet.worksheet(settings.GOOGLE_SHEETS_WORKSHEET_NAME)
+        except gspread.WorksheetNotFound:
+            # Create new worksheet if it doesn't exist
+            worksheet = spreadsheet.add_worksheet(
+                title=settings.GOOGLE_SHEETS_WORKSHEET_NAME,
+                rows="1000",
+                cols="20"
+            )
             
-            # Recreate with larger dimensions
-            canvas = Image.new('RGB', (canvas_width, canvas_height), 'white')
-            draw = ImageDraw.Draw(canvas)
+            # Add headers
+            headers = [
+                'Order ID', 'Customer Name', 'Phone Number', 'Email',
+                'Delivery Date', 'Delivery Time Slot', 'Address',
+                'Meal Type', 'Quantity', 'Special Requests',
+                'Amount', 'Payment Status', 'Verification Status',
+                'QR Code URL', 'Payment Screenshot URL',
+                'Order Date', 'Created At', 'Updated At',
+                'Notes', 'Status'
+            ]
+            worksheet.append_row(headers)
             
-            # Repeat the drawing process with larger dimensions
-            # (You can extract this into a separate function to avoid repetition)
-            # For brevity, I'll just resize the existing image
-            canvas_large = canvas.resize((1000, 1200), Image.Resampling.LANCZOS)
-            
-            img_buffer = io.BytesIO()
-            canvas_large.save(img_buffer, format='PNG', quality=100, optimize=False)
-            img_buffer.seek(0)
-            
-            final_size = len(img_buffer.getvalue())
-            logger.debug(f"Final QR code size: {final_size} bytes")
-
-        # Upload to Cloudinary
-        configure_cloudinary()
-        result = cloudinary.uploader.upload(
-            img_buffer,
-            folder="qr_codes",
-            public_id=f"qr_{order_id}",
-            overwrite=True,
-            resource_type="image",
-            format="png",
-            quality="auto:best"  # Ensure high quality
-        )
+            # Format headers
+            worksheet.format('A1:T1', {
+                'backgroundColor': {'red': 0.2, 'green': 0.5, 'blue': 0.3},
+                'textFormat': {'bold': True, 'foregroundColor': {'red': 1, 'green': 1, 'blue': 1}}
+            })
         
-        qr_url = result.get('secure_url')
-        logger.debug(f"QR code uploaded to Cloudinary: {qr_url}")
-        return qr_url
+        return worksheet
         
     except Exception as e:
-        logger.error(f"Error generating branded QR code: {str(e)}")
-        logger.error(traceback.format_exc())
+        logger.error(f"Error getting/creating worksheet: {str(e)}")
         return None
-
-
-def configure_cloudinary():
-    """Configure Cloudinary with settings from Django settings."""
-    cloudinary.config(
-        cloud_name=getattr(settings, 'CLOUDINARY_CLOUD_NAME', None),
-        api_key=getattr(settings, 'CLOUDINARY_API_KEY', None),
-        api_secret=getattr(settings, 'CLOUDINARY_API_SECRET', None)
-    )
-
-
-def upload_to_cloudinary(media_url: str, order_id: str) -> Optional[str]:
-    """
-    Upload payment screenshot to Cloudinary
-    """
-    try:
-        import requests
-        
-        # Download the image from WhatsApp
-        headers = {
-            'Authorization': f'Bearer {settings.WHATSAPP_ACCESS_TOKEN}'
-        }
-        
-        response = requests.get(media_url, headers=headers, timeout=30)
-        response.raise_for_status()
-        
-        # Configure Cloudinary
-        configure_cloudinary()
-        
-        # Upload to Cloudinary
-        result = cloudinary.uploader.upload(
-            response.content,
-            folder="payment_screenshots",
-            public_id=f"payment_{order_id}",
-            overwrite=True,
-            resource_type="image"
-        )
-        
-        cloudinary_url = result.get('secure_url')
-        logger.debug(f"Payment screenshot uploaded to Cloudinary: {cloudinary_url}")
-        return cloudinary_url
-        
-    except Exception as e:
-        logger.error(f"Error uploading to Cloudinary: {str(e)}")
-        logger.error(traceback.format_exc())
-        return None
-
-
-def generate_order_id() -> str:
-    """Generate unique order ID"""
-    import uuid
-    from datetime import datetime
-    
-    # Format: EO-YYYYMMDD-XXXX where XXXX is last 4 chars of UUID
-    date_str = datetime.now().strftime('%Y%m%d')
-    uuid_suffix = str(uuid.uuid4()).replace('-', '')[-4:].upper()
-    
-    return f"EO-{date_str}-{uuid_suffix}"
-
-
-def get_available_dates():
-    """Get list of available delivery dates (minimum 3 days advance)"""
-    from datetime import datetime, timedelta
-    
-    # Start from 3 days from now
-    start_date = datetime.now().date() + timedelta(days=3)
-    
-    # Generate next 30 days
-    dates = []
-    for i in range(30):
-        date = start_date + timedelta(days=i)
-        dates.append(date)
-    
-    return dates
-
 
 def save_to_google_sheet(order) -> bool:
     """
     Save order to Google Sheet
-    This is a placeholder - implement Google Sheets API integration
     """
     try:
-        # Placeholder implementation
-        logger.info(f"Would save order {order.order_id} to Google Sheet")
-        # TODO: Implement actual Google Sheets API integration
+        worksheet = get_or_create_worksheet()
+        if not worksheet:
+            logger.error("Could not get worksheet")
+            return False
+        
+        # Prepare order data
+        order_data = [
+            order.order_id,
+            order.customer_name,
+            order.phone_number,
+            getattr(order, 'email', ''),
+            str(order.delivery_date) if order.delivery_date else '',
+            order.delivery_time_slot,
+            order.address,
+            order.meal_type,
+            str(order.quantity),
+            order.special_requests or '',
+            f"₹{order.amount:.2f}",
+            order.payment_status,
+            order.verification_status,
+            order.qr_code_url or '',
+            order.payment_screenshot_url or '',
+            str(order.delivery_date) if order.delivery_date else '',
+            order.created_at.strftime('%Y-%m-%d %H:%M:%S') if order.created_at else '',
+            order.updated_at.strftime('%Y-%m-%d %H:%M:%S') if hasattr(order, 'updated_at') and order.updated_at else '',
+            '',  # Notes - can be filled manually
+            'Active'  # Status
+        ]
+        
+        # Find if order already exists
+        try:
+            cell = worksheet.find(order.order_id)
+            # Update existing row
+            row_number = cell.row
+            worksheet.update(f'A{row_number}:T{row_number}', [order_data])
+            logger.info(f"Updated existing order {order.order_id} in Google Sheet at row {row_number}")
+        except gspread.CellNotFound:
+            # Add new row
+            worksheet.append_row(order_data)
+            logger.info(f"Added new order {order.order_id} to Google Sheet")
+        
         return True
+        
     except Exception as e:
         logger.error(f"Error saving to Google Sheet: {str(e)}")
+        logger.error(traceback.format_exc())
         return False
-
 
 def update_sheet_verification_status(order, status: str) -> bool:
     """
     Update verification status in Google Sheet
-    This is a placeholder - implement Google Sheets API integration
     """
     try:
-        # Placeholder implementation
-        logger.info(f"Would update order {order.order_id} status to {status} in Google Sheet")
-        # TODO: Implement actual Google Sheets API integration
-        return True
+        worksheet = get_or_create_worksheet()
+        if not worksheet:
+            return False
+        
+        # Find the order row
+        try:
+            cell = worksheet.find(order.order_id)
+            row_number = cell.row
+            
+            # Update verification status (column M) and updated_at (column R)
+            updates = [
+                {
+                    'range': f'M{row_number}',  # Verification Status column
+                    'values': [[status]]
+                },
+                {
+                    'range': f'R{row_number}',  # Updated At column
+                    'values': [[datetime.now().strftime('%Y-%m-%d %H:%M:%S')]]
+                }
+            ]
+            
+            # If payment screenshot URL is available, update that too
+            if hasattr(order, 'payment_screenshot_url') and order.payment_screenshot_url:
+                updates.append({
+                    'range': f'O{row_number}',  # Payment Screenshot URL column
+                    'values': [[order.payment_screenshot_url]]
+                })
+            
+            # Batch update
+            worksheet.batch_update(updates)
+            
+            logger.info(f"Updated verification status for order {order.order_id} to {status}")
+            return True
+            
+        except gspread.CellNotFound:
+            logger.error(f"Order {order.order_id} not found in Google Sheet")
+            return False
+        
     except Exception as e:
-        logger.error(f"Error updating Google Sheet: {str(e)}")
+        logger.error(f"Error updating verification status in Google Sheet: {str(e)}")
+        logger.error(traceback.format_exc())
+        return False
+
+def update_payment_status_in_sheet(order, payment_status: str, payment_screenshot_url: str = None) -> bool:
+    """
+    Update payment status and screenshot URL in Google Sheet
+    """
+    try:
+        worksheet = get_or_create_worksheet()
+        if not worksheet:
+            return False
+        
+        # Find the order row
+        try:
+            cell = worksheet.find(order.order_id)
+            row_number = cell.row
+            
+            # Prepare updates
+            updates = [
+                {
+                    'range': f'L{row_number}',  # Payment Status column
+                    'values': [[payment_status]]
+                },
+                {
+                    'range': f'R{row_number}',  # Updated At column
+                    'values': [[datetime.now().strftime('%Y-%m-%d %H:%M:%S')]]
+                }
+            ]
+            
+            # Add payment screenshot URL if provided
+            if payment_screenshot_url:
+                updates.append({
+                    'range': f'O{row_number}',  # Payment Screenshot URL column
+                    'values': [[payment_screenshot_url]]
+                })
+            
+            # Batch update
+            worksheet.batch_update(updates)
+            
+            logger.info(f"Updated payment status for order {order.order_id} to {payment_status}")
+            return True
+            
+        except gspread.CellNotFound:
+            logger.error(f"Order {order.order_id} not found in Google Sheet")
+            return False
+        
+    except Exception as e:
+        logger.error(f"Error updating payment status in Google Sheet: {str(e)}")
+        logger.error(traceback.format_exc())
+        return False
+
+def get_orders_from_sheet(date_filter=None) -> list:
+    """
+    Retrieve orders from Google Sheet with optional date filter
+    """
+    try:
+        worksheet = get_or_create_worksheet()
+        if not worksheet:
+            return []
+        
+        # Get all records
+        records = worksheet.get_all_records()
+        
+        if date_filter:
+            # Filter by delivery date
+            filtered_records = []
+            for record in records:
+                if record.get('Delivery Date') == str(date_filter):
+                    filtered_records.append(record)
+            return filtered_records
+        
+        return records
+        
+    except Exception as e:
+        logger.error(f"Error retrieving orders from Google Sheet: {str(e)}")
+        return []
+
+def add_notes_to_order(order_id: str, notes: str) -> bool:
+    """
+    Add notes to an order in Google Sheet
+    """
+    try:
+        worksheet = get_or_create_worksheet()
+        if not worksheet:
+            return False
+        
+        # Find the order row
+        try:
+            cell = worksheet.find(order_id)
+            row_number = cell.row
+            
+            # Update notes column (column S) and updated_at
+            updates = [
+                {
+                    'range': f'S{row_number}',  # Notes column
+                    'values': [[notes]]
+                },
+                {
+                    'range': f'R{row_number}',  # Updated At column
+                    'values': [[datetime.now().strftime('%Y-%m-%d %H:%M:%S')]]
+                }
+            ]
+            
+            worksheet.batch_update(updates)
+            logger.info(f"Added notes to order {order_id}")
+            return True
+            
+        except gspread.CellNotFound:
+            logger.error(f"Order {order_id} not found in Google Sheet")
+            return False
+        
+    except Exception as e:
+        logger.error(f"Error adding notes to Google Sheet: {str(e)}")
+        return False
+
+# Additional utility functions
+
+def get_daily_orders_summary(date) -> dict:
+    """
+    Get summary of orders for a specific date
+    """
+    try:
+        orders = get_orders_from_sheet(date_filter=date)
+        
+        summary = {
+            'total_orders': len(orders),
+            'confirmed_orders': 0,
+            'pending_verification': 0,
+            'total_amount': 0,
+            'meal_types': {}
+        }
+        
+        for order in orders:
+            # Count confirmed orders
+            if order.get('Verification Status') == 'verified':
+                summary['confirmed_orders'] += 1
+            elif order.get('Verification Status') == 'pending':
+                summary['pending_verification'] += 1
+            
+            # Sum total amount
+            amount_str = order.get('Amount', '₹0').replace('₹', '')
+            try:
+                amount = float(amount_str)
+                summary['total_amount'] += amount
+            except:
+                pass
+            
+            # Count meal types
+            meal_type = order.get('Meal Type', 'Unknown')
+            summary['meal_types'][meal_type] = summary['meal_types'].get(meal_type, 0) + 1
+        
+        return summary
+        
+    except Exception as e:
+        logger.error(f"Error generating daily summary: {str(e)}")
+        return {}
+
+def backup_sheet_data() -> bool:
+    """
+    Create a backup of the sheet data as JSON
+    """
+    try:
+        worksheet = get_or_create_worksheet()
+        if not worksheet:
+            return False
+        
+        # Get all data
+        all_data = worksheet.get_all_records()
+        
+        # Create backup filename with timestamp
+        backup_filename = f"orders_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        backup_path = f"/tmp/{backup_filename}"  # Adjust path as needed
+        
+        # Save to JSON file
+        with open(backup_path, 'w', encoding='utf-8') as f:
+            json.dump(all_data, f, indent=2, ensure_ascii=False, default=str)
+        
+        logger.info(f"Sheet data backed up to {backup_path}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error creating backup: {str(e)}")
         return False
