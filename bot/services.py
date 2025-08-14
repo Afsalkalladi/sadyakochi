@@ -179,8 +179,6 @@ class EeOnamBot:
             "Let's start by selecting your preferred delivery date.\n\n"
             "Please choose a date (minimum 3 days in advance):"
         )
-        # Send the welcome message with YouTube link
-        self.whatsapp.send_message(session.phone_number, welcome_message)
         # Get available dates
         dates = get_available_dates()
         buttons = []
