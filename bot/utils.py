@@ -44,6 +44,9 @@ def debug_log_settings():
     logger.debug(f"GOOGLE_DRIVE_FOLDER_ID: {'SET' if hasattr(settings, 'GOOGLE_DRIVE_FOLDER_ID') else 'NOT SET'}")
     logger.debug(f"GOOGLE_SHEET_ID: {'SET' if hasattr(settings, 'GOOGLE_SHEET_ID') else 'NOT SET'}")
     logger.debug(f"WHATSAPP_ACCESS_TOKEN: {'SET' if hasattr(settings, 'WHATSAPP_ACCESS_TOKEN') else 'NOT SET'}")
+    logger.debug(f"CLOUDINARY_CLOUD_NAME: {'SET' if hasattr(settings, 'CLOUDINARY_CLOUD_NAME') else 'NOT SET'}")
+    logger.debug(f"CLOUDINARY_API_KEY: {'SET' if hasattr(settings, 'CLOUDINARY_API_KEY') else 'NOT SET'}")
+    logger.debug(f"CLOUDINARY_API_SECRET: {'SET' if hasattr(settings, 'CLOUDINARY_API_SECRET') else 'NOT SET'}")
     logger.debug("=== END SETTINGS DEBUG ===")
 
 
@@ -86,6 +89,15 @@ def test_google_credentials():
         return False
 
 
+def configure_cloudinary():
+    """Configure Cloudinary with settings from Django settings."""
+    cloudinary.config(
+        cloud_name=getattr(settings, 'CLOUDINARY_CLOUD_NAME', None),
+        api_key=getattr(settings, 'CLOUDINARY_API_KEY', None),
+        api_secret=getattr(settings, 'CLOUDINARY_API_SECRET', None)
+    )
+
+
 def generate_qr_code(amount: float, order_id: str) -> Optional[str]:
     try:
         upi_string = (
@@ -110,11 +122,7 @@ def generate_qr_code(amount: float, order_id: str) -> Optional[str]:
         img_buffer.seek(0)
 
         # Upload to Cloudinary
-        cloudinary.config(
-            cloud_name=getattr(settings, 'CLOUDINARY_CLOUD_NAME', None),
-            api_key=getattr(settings, 'CLOUDINARY_API_KEY', None),
-            api_secret=getattr(settings, 'CLOUDINARY_API_SECRET', None)
-        )
+        configure_cloudinary()
         result = cloudinary.uploader.upload(
             img_buffer,
             folder="qr_codes",
@@ -129,60 +137,44 @@ def generate_qr_code(amount: float, order_id: str) -> Optional[str]:
         return None
 
 
-def upload_qr_to_drive(image_buffer: io.BytesIO, filename: str) -> Optional[str]:
-    try:
-        creds = get_google_credentials()
-        if not creds:
-            return None
-        service = build('drive', 'v3', credentials=creds)
-        folder_id = getattr(settings, 'GOOGLE_DRIVE_FOLDER_ID', None)
-        if not folder_id:
-            return None
-        
-        file_metadata = {'name': filename, 'parents': [folder_id]}
-        media = MediaIoBaseUpload(image_buffer, mimetype='image/png')
-        file = service.files().create(
-            body=file_metadata, media_body=media, fields='id'
-        ).execute()
-        
-        file_id = file.get('id')
-        service.permissions().create(
-            fileId=file_id, body={'role': 'reader', 'type': 'anyone'}
-        ).execute()
-        
-        return f"https://drive.google.com/uc?id={file_id}"
-    except Exception:
-        logger.error(traceback.format_exc())
-        return None
 
 
-def upload_to_drive(media_url: str, order_id: str) -> Optional[str]:
+
+def upload_to_cloudinary(media_url: str, order_id: str) -> Optional[str]:
+    """
+    Download payment screenshot from WhatsApp and upload to Cloudinary.
+    Returns the Cloudinary URL of the uploaded image.
+    """
     try:
+        logger.debug(f"Downloading payment screenshot for order {order_id} from {media_url}")
+        
+        # Download the image from WhatsApp
         headers = {'Authorization': f'Bearer {settings.WHATSAPP_ACCESS_TOKEN}'}
         response = requests.get(media_url, headers=headers, timeout=30)
         response.raise_for_status()
         img_buffer = io.BytesIO(response.content)
         
-        creds = get_google_credentials()
-        if not creds:
-            return None
-        service = build('drive', 'v3', credentials=creds)
-        folder_id = getattr(settings, 'GOOGLE_DRIVE_FOLDER_ID', None)
-        if not folder_id:
-            return None
+        logger.debug(f"Downloaded image, size: {len(response.content)} bytes")
         
-        file_metadata = {'name': f"payment_screenshot_{order_id}.jpg", 'parents': [folder_id]}
-        media = MediaIoBaseUpload(img_buffer, mimetype='image/jpeg')
-        file = service.files().create(
-            body=file_metadata, media_body=media, fields='id'
-        ).execute()
+        # Configure and upload to Cloudinary
+        configure_cloudinary()
         
-        file_id = file.get('id')
-        service.permissions().create(
-            fileId=file_id, body={'role': 'reader', 'type': 'anyone'}
-        ).execute()
-        return f"https://drive.google.com/uc?id={file_id}"
-    except Exception:
+        result = cloudinary.uploader.upload(
+            img_buffer,
+            folder="payment_screenshots",
+            public_id=f"payment_{order_id}",
+            overwrite=True,
+            resource_type="image",
+            format="jpg"  # Force JPG format for consistency
+        )
+        
+        cloudinary_url = result.get('secure_url')
+        logger.debug(f"Successfully uploaded to Cloudinary: {cloudinary_url}")
+        
+        return cloudinary_url
+        
+    except Exception as e:
+        logger.error(f"Error uploading payment screenshot to Cloudinary: {str(e)}")
         logger.error(traceback.format_exc())
         return None
 
@@ -251,7 +243,7 @@ def debug_save_to_google_sheet(order) -> bool:
             float(order.total_amount),
             order.delivery_address,
             order.maps_link or '',
-            order.payment_screenshot_url or '',
+            order.payment_screenshot_url or '',  # This will now be a Cloudinary URL
             order.get_verification_url(),
             order.get_rejection_url(),
             order.status.title()
@@ -310,7 +302,7 @@ def initialize_google_sheet() -> bool:
         if not sheet.row_values(1):
             headers = [
                 'Timestamp', 'Phone', 'Junction', 'Delivery Date', 'Order ID',
-                'Items', 'Total', 'Delivery Address', 'Maps Link', 'Drive Link',
+                'Items', 'Total', 'Delivery Address', 'Maps Link', 'Cloudinary Link',  # Updated header
                 'Verification Link', 'Rejection Link', 'Verified Status'
             ]
             sheet.append_row(headers)
