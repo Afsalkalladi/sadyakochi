@@ -1,366 +1,408 @@
-
-import gspread
-from datetime import datetime
-import json
+import io
 import os
-import logging
-
+import json
+import qrcode
 import traceback
+from typing import Optional
+from PIL import Image, ImageDraw, ImageFont
+import cloudinary
+import cloudinary.uploader
+import gspread
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
+from django.conf import settings
+import logging
+from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
-from django.conf import settings
 
-def get_google_sheets_client():
-    """Initialize and return Google Sheets client using OAuth token from env"""
+# =========================
+# Cloudinary / QR Functions
+# =========================
+
+def generate_qr_code(amount: float, order_id: str) -> Optional[str]:
+    """
+    Generate a branded QR code with Sadya Kochi branding and graphics.
+    Ensures the final image is at least 10KB in size.
+    """
     try:
-        token_json_str = getattr(settings, 'GOOGLE_OAUTH_TOKEN_JSON', None) or os.getenv('GOOGLE_OAUTH_TOKEN_JSON')
-        if not token_json_str:
-            raise Exception("GOOGLE_OAUTH_TOKEN_JSON not set in environment or settings.")
-        token_data = json.loads(token_json_str)
-        creds = gspread.auth.service_account.Credentials.from_authorized_user_info(token_data)
-        client = gspread.authorize(creds)
-        return client
-    except Exception as e:
-        logger.error(f"Error initializing Google Sheets client: {str(e)}")
-        return None
-
-
-def get_or_create_worksheet():
-    """Get the first worksheet in the Google Sheet (no worksheet name env needed)"""
-    try:
-        client = get_google_sheets_client()
-        if not client:
-            return None
-        spreadsheet = client.open_by_key(settings.GOOGLE_SHEET_ID)
-        worksheet = spreadsheet.get_worksheet(0)  # Use the first worksheet
-        return worksheet
-    except Exception as e:
-        logger.error(f"Error getting worksheet: {str(e)}")
-        return None
-
-def get_or_create_worksheet():
-    """Get or create the orders worksheet"""
-    try:
-        client = get_google_sheets_client()
-        if not client:
-            return None
-            
-        # Open the spreadsheet
-        spreadsheet = client.open_by_key(settings.GOOGLE_SHEETS_SPREADSHEET_ID)
+        upi_string = (
+            f"upi://pay?"
+            f"pa={settings.UPI_ID}&"
+            f"pn={settings.UPI_MERCHANT_NAME}&"
+            f"am={amount}&"
+            f"cu=INR&"
+            f"tn=Order_{order_id}"
+        )
         
+        # Create QR code with higher settings for better quality
+        qr = qrcode.QRCode(
+            version=3,
+            error_correction=qrcode.constants.ERROR_CORRECT_H,
+            box_size=15,
+            border=6,
+        )
+        qr.add_data(upi_string)
+        qr.make(fit=True)
+        
+        # Generate base QR code
+        qr_img = qr.make_image(fill_color="black", back_color="white")
+        
+        # Create a larger canvas with branding
+        canvas_width = 800
+        canvas_height = 1000
+        
+        # Create new image with white background
+        canvas = Image.new('RGB', (canvas_width, canvas_height), 'white')
+        draw = ImageDraw.Draw(canvas)
+        
+        # Decorative borders
+        border_color = "#2E8B57"
+        border_width = 8
+        draw.rectangle([0, 0, canvas_width, canvas_height], outline=border_color, width=border_width)
+        inner_border_margin = 20
+        draw.rectangle([
+            inner_border_margin, inner_border_margin, 
+            canvas_width - inner_border_margin, canvas_height - inner_border_margin
+        ], outline="#FFD700", width=4)
+        
+        # Brand header
+        header_height = 120
+        draw.rectangle([
+            border_width, border_width, 
+            canvas_width - border_width, header_height + border_width
+        ], fill="#2E8B57")
+        
+        # Fonts (fallback-safe)
         try:
-            # Try to get existing worksheet
-            worksheet = spreadsheet.worksheet(settings.GOOGLE_SHEETS_WORKSHEET_NAME)
-        except gspread.WorksheetNotFound:
-            # Create new worksheet if it doesn't exist
-            worksheet = spreadsheet.add_worksheet(
-                title=settings.GOOGLE_SHEETS_WORKSHEET_NAME,
-                rows="1000",
-                cols="20"
-            )
-            
-            # Add headers
-            headers = [
-                'Order ID', 'Customer Name', 'Phone Number', 'Email',
-                'Delivery Date', 'Delivery Time Slot', 'Address',
-                'Meal Type', 'Quantity', 'Special Requests',
-                'Amount', 'Payment Status', 'Verification Status',
-                'QR Code URL', 'Payment Screenshot URL',
-                'Order Date', 'Created At', 'Updated At',
-                'Notes', 'Status'
-            ]
-            worksheet.append_row(headers)
-            
-            # Format headers
-            worksheet.format('A1:T1', {
-                'backgroundColor': {'red': 0.2, 'green': 0.5, 'blue': 0.3},
-                'textFormat': {'bold': True, 'foregroundColor': {'red': 1, 'green': 1, 'blue': 1}}
-            })
+            title_font = ImageFont.truetype("/System/Library/Fonts/Arial.ttc", 48)
+            subtitle_font = ImageFont.truetype("/System/Library/Fonts/Arial.ttc", 24)
+            detail_font = ImageFont.truetype("/System/Library/Fonts/Arial.ttc", 20)
+        except Exception:
+            try:
+                title_font = ImageFont.load_default()
+                subtitle_font = ImageFont.load_default()
+                detail_font = ImageFont.load_default()
+            except Exception:
+                title_font = subtitle_font = detail_font = None
         
-        return worksheet
+        # Brand text
+        brand_text = "SADYA KOCHI"
+        if title_font:
+            bbox = draw.textbbox((0, 0), brand_text, font=title_font)
+            text_width = bbox[2] - bbox[0]
+            draw.text(((canvas_width - text_width) // 2, 25), brand_text, fill="white", font=title_font)
+        
+        tagline = "Authentic Kerala Meals Delivered"
+        if subtitle_font:
+            bbox = draw.textbbox((0, 0), tagline, font=subtitle_font)
+            text_width = bbox[2] - bbox[0]
+            draw.text(((canvas_width - text_width) // 2, 80), tagline, fill="#FFD700", font=subtitle_font)
+        
+        # QR placement
+        qr_size = 450
+        qr_img_resized = qr_img.resize((qr_size, qr_size), Image.Resampling.LANCZOS)
+        qr_x = (canvas_width - qr_size) // 2
+        qr_y = header_height + 50
+        
+        # Shadow + frame
+        shadow_offset = 5
+        draw.rectangle([
+            qr_x + shadow_offset, qr_y + shadow_offset,
+            qr_x + qr_size + shadow_offset, qr_y + qr_size + shadow_offset
+        ], fill="#CCCCCC")
+        draw.rectangle([qr_x - 10, qr_y - 10, qr_x + qr_size + 10, qr_y + qr_size + 10], 
+                      fill="white", outline="#DDDDDD", width=2)
+        canvas.paste(qr_img_resized, (qr_x, qr_y))
+        
+        # Details
+        details_y = qr_y + qr_size + 40
+        if detail_font:
+            amount_text = f"Amount: ₹{amount:.2f}"
+            bbox = draw.textbbox((0, 0), amount_text, font=detail_font)
+            draw.text(((canvas_width - (bbox[2]-bbox[0])) // 2, details_y), amount_text, fill="#2E8B57", font=detail_font)
+            
+            order_text = f"Order ID: {order_id}"
+            bbox = draw.textbbox((0, 0), order_text, font=detail_font)
+            draw.text(((canvas_width - (bbox[2]-bbox[0])) // 2, details_y + 35), order_text, fill="#666666", font=detail_font)
+            
+            instruction_text = "Scan to pay with any UPI app"
+            bbox = draw.textbbox((0, 0), instruction_text, font=detail_font)
+            draw.text(((canvas_width - (bbox[2]-bbox[0])) // 2, details_y + 70), instruction_text, fill="#666666", font=detail_font)
+        
+        # Decorative arcs
+        for i in range(3):
+            draw.arc([30 + i*10, 140 + i*10, 70 + i*10, 180 + i*10], start=0, end=90, fill="#FFD700", width=3)
+            draw.arc([canvas_width - 70 - i*10, 140 + i*10, canvas_width - 30 - i*10, 180 + i*10], start=90, end=180, fill="#FFD700", width=3)
+        
+        # Encode
+        img_buffer = io.BytesIO()
+        canvas.save(img_buffer, format='PNG', quality=95, optimize=False)
+        img_buffer.seek(0)
+        
+        if len(img_buffer.getvalue()) < 10240:
+            # Bump size if under 10KB
+            canvas_large = canvas.resize((1000, 1200), Image.Resampling.LANCZOS)
+            img_buffer = io.BytesIO()
+            canvas_large.save(img_buffer, format='PNG', quality=100, optimize=False)
+            img_buffer.seek(0)
+
+        # Upload to Cloudinary
+        configure_cloudinary()
+        result = cloudinary.uploader.upload(
+            img_buffer,
+            folder="qr_codes",
+            public_id=f"qr_{order_id}",
+            overwrite=True,
+            resource_type="image",
+            format="png",
+            quality="auto:best"
+        )
+        return result.get('secure_url')
         
     except Exception as e:
-        logger.error(f"Error getting/creating worksheet: {str(e)}")
+        logger.error(f"Error generating branded QR code: {str(e)}")
+        logger.error(traceback.format_exc())
         return None
+
+
+def configure_cloudinary():
+    """Configure Cloudinary with settings from Django settings."""
+    cloudinary.config(
+        cloud_name=getattr(settings, 'CLOUDINARY_CLOUD_NAME', None),
+        api_key=getattr(settings, 'CLOUDINARY_API_KEY', None),
+        api_secret=getattr(settings, 'CLOUDINARY_API_SECRET', None)
+    )
+
+
+def upload_to_cloudinary(media_url: str, order_id: str) -> Optional[str]:
+    """
+    Upload payment screenshot to Cloudinary.
+    """
+    try:
+        import requests
+        headers = { 'Authorization': f'Bearer {settings.WHATSAPP_ACCESS_TOKEN}' }
+        resp = requests.get(media_url, headers=headers, timeout=30)
+        resp.raise_for_status()
+
+        configure_cloudinary()
+        result = cloudinary.uploader.upload(
+            resp.content,
+            folder="payment_screenshots",
+            public_id=f"payment_{order_id}",
+            overwrite=True,
+            resource_type="image"
+        )
+        return result.get('secure_url')
+    except Exception as e:
+        logger.error(f"Error uploading to Cloudinary: {str(e)}")
+        logger.error(traceback.format_exc())
+        return None
+
+
+def generate_order_id() -> str:
+    """Generate unique order ID (EO-YYYYMMDD-XXXX)."""
+    import uuid
+    date_str = datetime.now().strftime('%Y%m%d')
+    uuid_suffix = str(uuid.uuid4()).replace('-', '')[-4:].upper()
+    return f"EO-{date_str}-{uuid_suffix}"
+
+
+def get_available_dates():
+    """Get list of available delivery dates (minimum 3 days advance, next 30 days)."""
+    start_date = datetime.now().date() + timedelta(days=3)
+    return [start_date + timedelta(days=i) for i in range(30)]
+
+
+# =========================
+# Google Sheets (Restored)
+# =========================
+
+def get_google_credentials():
+    """Load credentials from environment variable (GOOGLE_OAUTH_TOKEN_JSON) or token.json."""
+    SCOPES = [
+        'https://www.googleapis.com/auth/drive',
+        'https://www.googleapis.com/auth/spreadsheets'
+    ]
+    creds = None
+    token_json_str = os.getenv('GOOGLE_OAUTH_TOKEN_JSON')
+
+    if token_json_str:
+        try:
+            logger.debug("Loading Google credentials from environment variable")
+            token_data = json.loads(token_json_str)
+            creds = Credentials.from_authorized_user_info(token_data, SCOPES)
+            logger.debug("Successfully loaded credentials from environment variable")
+        except json.JSONDecodeError as e:
+            logger.error(f"Error parsing GOOGLE_OAUTH_TOKEN_JSON: {str(e)}")
+            return None
+        except Exception as e:
+            logger.error(f"Error creating credentials from environment variable: {str(e)}")
+            logger.error(traceback.format_exc())
+            return None
+    else:
+        token_path = os.getenv('GOOGLE_OAUTH_TOKEN_PATH', 'token.json')
+        if os.path.exists(token_path):
+            try:
+                logger.debug(f"Loading Google credentials from file: {token_path}")
+                with open(token_path, 'r') as token_file:
+                    token_data = json.load(token_file)
+                    creds = Credentials.from_authorized_user_info(token_data, SCOPES)
+                logger.debug("Successfully loaded credentials from file")
+            except Exception as e:
+                logger.error(f"Error loading credentials from file: {str(e)}")
+                logger.error(traceback.format_exc())
+                return None
+        else:
+            logger.error(f"Neither GOOGLE_OAUTH_TOKEN_JSON env var nor token file found at: {token_path}")
+            return None
+
+    if creds and creds.expired and creds.refresh_token:
+        try:
+            logger.debug("Refreshing expired Google credentials")
+            creds.refresh(Request())
+            refreshed_token_json = creds.to_json()
+            if token_json_str:
+                logger.info("Token refreshed. Update GOOGLE_OAUTH_TOKEN_JSON env var with the new token JSON.")
+                logger.debug(refreshed_token_json)
+            else:
+                with open(os.getenv('GOOGLE_OAUTH_TOKEN_PATH', 'token.json'), 'w') as token_file:
+                    token_file.write(refreshed_token_json)
+                logger.debug("Updated local token.json with refreshed token")
+        except Exception as e:
+            logger.error(f"Error refreshing Google credentials: {str(e)}")
+            logger.error(traceback.format_exc())
+            return None
+
+    if not creds or not creds.valid:
+        logger.error("Invalid or missing Google credentials.")
+        return None
+
+    logger.debug("Google credentials are valid and ready to use")
+    return creds
+
+
+def parse_items_for_display(items_dict: dict) -> str:
+    names = {
+        1: 'Veg Sadhya',
+        2: 'Non-Veg Sadhya',
+        3: 'Palada Pradhaman',
+        4: 'Parippu/Gothambu Payasam',
+        5: 'Kaaya Varuthathu',
+        6: 'Sharkkaravaratti'
+    }
+    # Accept both {"1": 2} and {1: 2}
+    if items_dict and isinstance(list(items_dict.keys())[0], str):
+        items_dict = {int(k): v for k, v in items_dict.items()}
+    return ', '.join(f"{names[i]} x {q}" for i, q in items_dict.items() if i in names)
+
 
 def save_to_google_sheet(order) -> bool:
     """
-    Save order to Google Sheet
+    Append order details to Google Sheet and store the row number in the DB.
+    (Restored behavior)
     """
     try:
-        worksheet = get_or_create_worksheet()
-        if not worksheet:
-            logger.error("Could not get worksheet")
+        creds = get_google_credentials()
+        if not creds:
             return False
-        
-        # Prepare order data
-        order_data = [
-            order.order_id,
-            order.customer_name,
+
+        gc = gspread.authorize(creds)
+        sheet_id = getattr(settings, 'GOOGLE_SHEET_ID', None)
+        if not sheet_id:
+            logger.error("GOOGLE_SHEET_ID not set")
+            return False
+
+        workbook = gc.open_by_key(sheet_id)
+        sheet = workbook.sheet1
+
+        # Items -> readable string
+        items_dict = json.loads(order.items)
+        items_display = parse_items_for_display(items_dict)
+
+        from .models import Order
+        junction_display = dict(Order.JUNCTION_CHOICES)[order.junction]
+
+        row_data = [
+            order.created_at.strftime('%Y-%m-%d %H:%M:%S'),
             order.phone_number,
-            getattr(order, 'email', ''),
-            str(order.delivery_date) if order.delivery_date else '',
-            order.delivery_time_slot,
-            order.address,
-            order.meal_type,
-            str(order.quantity),
-            order.special_requests or '',
-            f"₹{order.amount:.2f}",
-            order.payment_status,
-            order.verification_status,
-            order.qr_code_url or '',
-            order.payment_screenshot_url or '',
-            str(order.delivery_date) if order.delivery_date else '',
-            order.created_at.strftime('%Y-%m-%d %H:%M:%S') if order.created_at else '',
-            order.updated_at.strftime('%Y-%m-%d %H:%M:%S') if hasattr(order, 'updated_at') and order.updated_at else '',
-            '',  # Notes - can be filled manually
-            'Active'  # Status
+            junction_display,
+            order.delivery_date.strftime('%Y-%m-%d'),
+            order.order_id,
+            items_display,
+            float(order.total_amount),
+            order.delivery_address,
+            order.maps_link or '',
+            order.payment_screenshot_url or '',  # Cloudinary URL
+            order.get_verification_url(),
+            order.get_rejection_url(),
+            order.status.title()
         ]
-        
-        # Find if order already exists
-        try:
-            cell = worksheet.find(order.order_id)
-            # Update existing row
-            row_number = cell.row
-            worksheet.update(f'A{row_number}:T{row_number}', [order_data])
-            logger.info(f"Updated existing order {order.order_id} in Google Sheet at row {row_number}")
-        except gspread.CellNotFound:
-            # Add new row
-            worksheet.append_row(order_data)
-            logger.info(f"Added new order {order.order_id} to Google Sheet")
-        
+
+        sheet.append_row(row_data)
+
+        # Capture row number for future updates
+        all_values = sheet.get_all_values()
+        order.sheet_row_number = len(all_values)
+        order.save(update_fields=['sheet_row_number'])
+
+        logger.debug(f"Order {order.order_id} saved to Google Sheet (row {order.sheet_row_number})")
         return True
-        
-    except Exception as e:
-        logger.error(f"Error saving to Google Sheet: {str(e)}")
+
+    except Exception:
         logger.error(traceback.format_exc())
         return False
+
 
 def update_sheet_verification_status(order, status: str) -> bool:
     """
-    Update verification status in Google Sheet
+    Update the 'Verified Status' column (col 13) in Google Sheet for the order row.
+    (Restored behavior)
     """
     try:
-        worksheet = get_or_create_worksheet()
-        if not worksheet:
+        creds = get_google_credentials()
+        if not creds:
             return False
-        
-        # Find the order row
-        try:
-            cell = worksheet.find(order.order_id)
-            row_number = cell.row
-            
-            # Update verification status (column M) and updated_at (column R)
-            updates = [
-                {
-                    'range': f'M{row_number}',  # Verification Status column
-                    'values': [[status]]
-                },
-                {
-                    'range': f'R{row_number}',  # Updated At column
-                    'values': [[datetime.now().strftime('%Y-%m-%d %H:%M:%S')]]
-                }
-            ]
-            
-            # If payment screenshot URL is available, update that too
-            if hasattr(order, 'payment_screenshot_url') and order.payment_screenshot_url:
-                updates.append({
-                    'range': f'O{row_number}',  # Payment Screenshot URL column
-                    'values': [[order.payment_screenshot_url]]
-                })
-            
-            # Batch update
-            worksheet.batch_update(updates)
-            
-            logger.info(f"Updated verification status for order {order.order_id} to {status}")
+
+        gc = gspread.authorize(creds)
+        sheet = gc.open_by_key(settings.GOOGLE_SHEET_ID).sheet1
+
+        if order.sheet_row_number:
+            sheet.update_cell(order.sheet_row_number, 13, status.title())
+            logger.debug(f"Updated Google Sheet row {order.sheet_row_number} to {status.title()}")
             return True
-            
-        except gspread.CellNotFound:
-            logger.error(f"Order {order.order_id} not found in Google Sheet")
-            return False
-        
-    except Exception as e:
-        logger.error(f"Error updating verification status in Google Sheet: {str(e)}")
+
+        logger.warning(f"Order {order.order_id} has no stored sheet_row_number")
+        return False
+
+    except Exception:
         logger.error(traceback.format_exc())
         return False
 
-def update_payment_status_in_sheet(order, payment_status: str, payment_screenshot_url: str = None) -> bool:
+
+def initialize_google_sheet() -> bool:
     """
-    Update payment status and screenshot URL in Google Sheet
+    Ensure Google Sheet has the expected headers (if first row is empty).
+    (Restored behavior)
     """
     try:
-        worksheet = get_or_create_worksheet()
-        if not worksheet:
+        creds = get_google_credentials()
+        if not creds:
             return False
-        
-        # Find the order row
-        try:
-            cell = worksheet.find(order.order_id)
-            row_number = cell.row
-            
-            # Prepare updates
-            updates = [
-                {
-                    'range': f'L{row_number}',  # Payment Status column
-                    'values': [[payment_status]]
-                },
-                {
-                    'range': f'R{row_number}',  # Updated At column
-                    'values': [[datetime.now().strftime('%Y-%m-%d %H:%M:%S')]]
-                }
+
+        gc = gspread.authorize(creds)
+        sheet = gc.open_by_key(settings.GOOGLE_SHEET_ID).sheet1
+
+        if not sheet.row_values(1):
+            headers = [
+                'Timestamp', 'Phone', 'Junction', 'Delivery Date', 'Order ID',
+                'Items', 'Total', 'Delivery Address', 'Maps Link', 'Cloudinary Link',
+                'Verification Link', 'Rejection Link', 'Verified Status'
             ]
-            
-            # Add payment screenshot URL if provided
-            if payment_screenshot_url:
-                updates.append({
-                    'range': f'O{row_number}',  # Payment Screenshot URL column
-                    'values': [[payment_screenshot_url]]
-                })
-            
-            # Batch update
-            worksheet.batch_update(updates)
-            
-            logger.info(f"Updated payment status for order {order.order_id} to {payment_status}")
-            return True
-            
-        except gspread.CellNotFound:
-            logger.error(f"Order {order.order_id} not found in Google Sheet")
-            return False
-        
-    except Exception as e:
-        logger.error(f"Error updating payment status in Google Sheet: {str(e)}")
-        logger.error(traceback.format_exc())
-        return False
+            sheet.append_row(headers)
 
-def get_orders_from_sheet(date_filter=None) -> list:
-    """
-    Retrieve orders from Google Sheet with optional date filter
-    """
-    try:
-        worksheet = get_or_create_worksheet()
-        if not worksheet:
-            return []
-        
-        # Get all records
-        records = worksheet.get_all_records()
-        
-        if date_filter:
-            # Filter by delivery date
-            filtered_records = []
-            for record in records:
-                if record.get('Delivery Date') == str(date_filter):
-                    filtered_records.append(record)
-            return filtered_records
-        
-        return records
-        
-    except Exception as e:
-        logger.error(f"Error retrieving orders from Google Sheet: {str(e)}")
-        return []
-
-def add_notes_to_order(order_id: str, notes: str) -> bool:
-    """
-    Add notes to an order in Google Sheet
-    """
-    try:
-        worksheet = get_or_create_worksheet()
-        if not worksheet:
-            return False
-        
-        # Find the order row
-        try:
-            cell = worksheet.find(order_id)
-            row_number = cell.row
-            
-            # Update notes column (column S) and updated_at
-            updates = [
-                {
-                    'range': f'S{row_number}',  # Notes column
-                    'values': [[notes]]
-                },
-                {
-                    'range': f'R{row_number}',  # Updated At column
-                    'values': [[datetime.now().strftime('%Y-%m-%d %H:%M:%S')]]
-                }
-            ]
-            
-            worksheet.batch_update(updates)
-            logger.info(f"Added notes to order {order_id}")
-            return True
-            
-        except gspread.CellNotFound:
-            logger.error(f"Order {order_id} not found in Google Sheet")
-            return False
-        
-    except Exception as e:
-        logger.error(f"Error adding notes to Google Sheet: {str(e)}")
-        return False
-
-# Additional utility functions
-
-def get_daily_orders_summary(date) -> dict:
-    """
-    Get summary of orders for a specific date
-    """
-    try:
-        orders = get_orders_from_sheet(date_filter=date)
-        
-        summary = {
-            'total_orders': len(orders),
-            'confirmed_orders': 0,
-            'pending_verification': 0,
-            'total_amount': 0,
-            'meal_types': {}
-        }
-        
-        for order in orders:
-            # Count confirmed orders
-            if order.get('Verification Status') == 'verified':
-                summary['confirmed_orders'] += 1
-            elif order.get('Verification Status') == 'pending':
-                summary['pending_verification'] += 1
-            
-            # Sum total amount
-            amount_str = order.get('Amount', '₹0').replace('₹', '')
-            try:
-                amount = float(amount_str)
-                summary['total_amount'] += amount
-            except:
-                pass
-            
-            # Count meal types
-            meal_type = order.get('Meal Type', 'Unknown')
-            summary['meal_types'][meal_type] = summary['meal_types'].get(meal_type, 0) + 1
-        
-        return summary
-        
-    except Exception as e:
-        logger.error(f"Error generating daily summary: {str(e)}")
-        return {}
-
-def backup_sheet_data() -> bool:
-    """
-    Create a backup of the sheet data as JSON
-    """
-    try:
-        worksheet = get_or_create_worksheet()
-        if not worksheet:
-            return False
-        
-        # Get all data
-        all_data = worksheet.get_all_records()
-        
-        # Create backup filename with timestamp
-        backup_filename = f"orders_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        backup_path = f"/tmp/{backup_filename}"  # Adjust path as needed
-        
-        # Save to JSON file
-        with open(backup_path, 'w', encoding='utf-8') as f:
-            json.dump(all_data, f, indent=2, ensure_ascii=False, default=str)
-        
-        logger.info(f"Sheet data backed up to {backup_path}")
         return True
-        
-    except Exception as e:
-        logger.error(f"Error creating backup: {str(e)}")
+
+    except Exception:
+        logger.error(traceback.format_exc())
         return False
